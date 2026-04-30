@@ -16,7 +16,7 @@ This project implements a complete deep learning pipeline for forecasting energy
 ## Project Structure
 
 ```
-yolo_demo/
+predict_energy_consuption/
 ├── app.py                 # Streamlit dashboard
 ├── train.py               # Main training script
 ├── quick_train.py        # Quick training test
