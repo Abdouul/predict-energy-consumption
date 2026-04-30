@@ -1,0 +1,22 @@
+# Energy Consumption Forecasting Project
+# Requirements for real-time deep learning pipeline
+
+# Core ML
+torch>=2.0.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Data processing
+scikit-learn>=1.3.0
+
+# API and HTTP
+requests>=2.31.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Streamlit dashboard
+streamlit>=1.28.0
+
+# Date/Time handling
+python-dateutil>=2.8.0
