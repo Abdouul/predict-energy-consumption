@@ -37,6 +37,33 @@ FRANCE_LON = 2.3522
 # Output directory
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
+# Main French metropolitan regions with approximate capital coordinates.
+# The factor is only used by the synthetic fallback to keep regional values realistic.
+FRENCH_REGIONS = {
+    "Auvergne-Rhone-Alpes": {"code": "84", "lat": 45.7640, "lon": 4.8357, "factor": 0.12},
+    "Bourgogne-Franche-Comte": {"code": "27", "lat": 47.3220, "lon": 5.0415, "factor": 0.05},
+    "Bretagne": {"code": "53", "lat": 48.1173, "lon": -1.6778, "factor": 0.05},
+    "Centre-Val de Loire": {"code": "24", "lat": 47.9029, "lon": 1.9093, "factor": 0.05},
+    "Grand Est": {"code": "44", "lat": 48.5734, "lon": 7.7521, "factor": 0.09},
+    "Hauts-de-France": {"code": "32", "lat": 50.6292, "lon": 3.0573, "factor": 0.10},
+    "Ile-de-France": {"code": "11", "lat": 48.8566, "lon": 2.3522, "factor": 0.16},
+    "Normandie": {"code": "28", "lat": 49.4432, "lon": 1.0993, "factor": 0.06},
+    "Nouvelle-Aquitaine": {"code": "75", "lat": 44.8378, "lon": -0.5792, "factor": 0.10},
+    "Occitanie": {"code": "76", "lat": 43.6047, "lon": 1.4442, "factor": 0.09},
+    "Pays de la Loire": {"code": "52", "lat": 47.2184, "lon": -1.5536, "factor": 0.06},
+    "Provence-Alpes-Cote d'Azur": {"code": "93", "lat": 43.2965, "lon": 5.3698, "factor": 0.08},
+}
+
+
+def get_region_names():
+    """Return the list of regions used by the demo."""
+    return list(FRENCH_REGIONS.keys())
+
+
+def get_region_info(region):
+    """Return coordinates and synthetic factor for a region."""
+    return FRENCH_REGIONS.get(region, FRENCH_REGIONS["Ile-de-France"])
+
 
 # ============================================================================
 # PART 1: REAL-TIME ENERGY DATA FETCHING
@@ -211,6 +238,74 @@ def fetch_historical_energy(start_date, end_date):
     return df
 
 
+def fetch_historical_energy_region(start_date, end_date, region):
+    """
+    Fetch regional historical consumption from RTE/ODRE eCO2mix data.
+
+    The dataset contains regional electricity consumption in MW. If the API
+    format changes or the request fails, collect_all_data_for_region will use
+    the synthetic fallback below.
+    """
+    print(f"Fetching regional energy data for {region}")
+    region_info = get_region_info(region)
+
+    url = "https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-regional-cons-def/records"
+    where = (
+        f"code_insee_region='{region_info['code']}' "
+        f"and date_heure >= date'{start_date:%Y-%m-%d}' "
+        f"and date_heure <= date'{end_date:%Y-%m-%d}'"
+    )
+    params = {
+        "limit": 100,
+        "where": where,
+        "order_by": "date_heure",
+        "select": "date_heure,libelle_region,consommation",
+    }
+
+    all_records = []
+    offset = 0
+    while True:
+        params["offset"] = offset
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        results = data.get("results", [])
+
+        for row in results:
+            consumption = row.get("consommation")
+            if consumption is None:
+                continue
+            all_records.append({
+                "timestamp": row.get("date_heure"),
+                "region": region,
+                "consumption_mw": consumption,
+            })
+
+        if len(results) < params["limit"]:
+            break
+        offset += params["limit"]
+        time.sleep(0.2)
+
+    df = pd.DataFrame(all_records)
+    if df.empty:
+        return df
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"]).dt.tz_localize(None)
+    df["consumption_mw"] = pd.to_numeric(df["consumption_mw"], errors="coerce")
+    df = df.dropna().sort_values("timestamp").drop_duplicates(subset=["timestamp"])
+
+    # RTE regional data is often half-hourly. The model uses hourly steps.
+    df = (
+        df.set_index("timestamp")
+        .resample("h")
+        .mean(numeric_only=True)
+        .reset_index()
+    )
+    df["region"] = region
+
+    return df
+
+
 def generate_synthetic_historical_energy(start_date, end_date):
     """
     Generate synthetic historical energy data when API is unavailable.
@@ -286,6 +381,15 @@ def generate_synthetic_historical_energy(start_date, end_date):
     df = pd.DataFrame(records)
     print(f"Generated {len(df)} hourly records")
     
+    return df
+
+
+def generate_synthetic_historical_energy_region(start_date, end_date, region):
+    """Generate realistic regional hourly consumption when RTE is unavailable."""
+    df = generate_synthetic_historical_energy(start_date, end_date)
+    info = get_region_info(region)
+    df["region"] = region
+    df["consumption_mw"] = (df["consumption_mw"] * info["factor"]).round(2)
     return df
 
 
@@ -424,7 +528,7 @@ def fetch_historical_weather(start_date, end_date, lat=FRANCE_LAT, lon=FRANCE_LO
     
     try:
         # Open-Meteo historical API
-        url = f"{OPEN_METEO_BASE_URL}/forecast"
+        url = "https://archive-api.open-meteo.com/v1/archive"
         
         params = {
             "latitude": lat,
@@ -454,6 +558,34 @@ def fetch_historical_weather(start_date, end_date, lat=FRANCE_LAT, lon=FRANCE_LO
         
     except Exception as e:
         print(f"Error fetching historical weather: {e}")
+        return generate_synthetic_historical_weather(start_date, end_date)
+
+
+def fetch_weather_forecast(start_date, days=2, lat=FRANCE_LAT, lon=FRANCE_LON):
+    """Fetch hourly weather forecast used for the next-24-hour prediction."""
+    try:
+        url = f"{OPEN_METEO_BASE_URL}/forecast"
+        params = {
+            "latitude": lat,
+            "longitude": lon,
+            "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m,cloud_cover",
+            "forecast_days": days,
+            "timezone": "Europe/Paris",
+        }
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        hourly = response.json().get("hourly", {})
+        df = pd.DataFrame({
+            "timestamp": pd.to_datetime(hourly.get("time")),
+            "temperature": hourly.get("temperature_2m"),
+            "humidity": hourly.get("relative_humidity_2m"),
+            "wind_speed": hourly.get("wind_speed_10m"),
+            "cloud_cover": hourly.get("cloud_cover"),
+        })
+        return df[df["timestamp"] >= pd.to_datetime(start_date)].reset_index(drop=True)
+    except Exception as e:
+        print(f"Error fetching weather forecast: {e}")
+        end_date = start_date + timedelta(days=days)
         return generate_synthetic_historical_weather(start_date, end_date)
 
 
@@ -609,6 +741,70 @@ def collect_all_data(start_date=None, end_date=None, use_synthetic=True):
     merged_df = merge_energy_weather(energy_df, weather_df)
     
     return merged_df
+
+
+def collect_all_data_for_region(region, start_date=None, end_date=None, use_synthetic=True):
+    """
+    Collect energy and weather data for one French region.
+
+    This is the regional version used by training and the Streamlit demo.
+    """
+    if end_date is None:
+        end_date = datetime.now()
+    if start_date is None:
+        start_date = end_date - timedelta(days=30)
+
+    region_info = get_region_info(region)
+
+    try:
+        energy_df = fetch_historical_energy_region(start_date, end_date, region)
+        if len(energy_df) < 48:
+            raise Exception("Insufficient regional energy data")
+    except Exception as e:
+        print(f"Could not fetch regional RTE data for {region}: {e}")
+        if use_synthetic:
+            energy_df = generate_synthetic_historical_energy_region(start_date, end_date, region)
+        else:
+            raise
+
+    try:
+        weather_df = fetch_historical_weather(
+            start_date,
+            end_date,
+            lat=region_info["lat"],
+            lon=region_info["lon"],
+        )
+        if len(weather_df) < 48:
+            raise Exception("Insufficient weather data")
+    except Exception as e:
+        print(f"Could not fetch Open-Meteo data for {region}: {e}")
+        if use_synthetic:
+            weather_df = generate_synthetic_historical_weather(start_date, end_date)
+        else:
+            raise
+
+    merged_df = merge_energy_weather(energy_df, weather_df)
+    merged_df["region"] = region
+
+    return merged_df
+
+
+def collect_regional_dataset(regions=None, start_date=None, end_date=None, use_synthetic=True):
+    """Collect and combine data for several French regions."""
+    if regions is None:
+        regions = get_region_names()
+
+    frames = []
+    for region in regions:
+        frame = collect_all_data_for_region(
+            region,
+            start_date=start_date,
+            end_date=end_date,
+            use_synthetic=use_synthetic,
+        )
+        frames.append(frame)
+
+    return pd.concat(frames, ignore_index=True)
 
 
 # ============================================================================

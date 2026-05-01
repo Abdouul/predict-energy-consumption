@@ -44,7 +44,7 @@ class TrainingConfig:
         
         # Early stopping
         self.patience = 10  # epochs to wait before early stop
-        self.min_delta = 50  # minimum improvement to count
+        self.min_delta = 0.0001  # minimum improvement to count
         
         # Device
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -290,7 +290,7 @@ class Trainer:
                 self.best_val_loss = val_loss
                 self.best_model_state = self.model.state_dict().copy()
                 self.epochs_without_improvement = 0
-                print(f"  ✓ New best model! Val loss: {val_loss:.4f}")
+                print(f"  New best model! Val loss: {val_loss:.4f}")
             else:
                 # No improvement
                 self.epochs_without_improvement += 1
@@ -451,7 +451,9 @@ def train_model(
     train_loader,
     val_loader,
     config=None,
-    save_path=None
+    save_path=None,
+    target_scaler=None,
+    predictions_path=None
 ):
     """
     Main function to train the model.
@@ -464,6 +466,8 @@ def train_model(
         val_loader: Validation data loader
         config: TrainingConfig (optional)
         save_path: Path to save the trained model
+        target_scaler: Optional scaler used to convert predictions back to MW
+        predictions_path: Optional CSV path for actual vs predicted values
     
     Returns:
         tuple: (trained_model, history, metrics)
@@ -481,6 +485,21 @@ def train_model(
     # Evaluate on validation set
     print("\nEvaluating on validation set...")
     preds, targets, metrics = evaluate_model(model, val_loader, config.device)
+
+    if target_scaler is not None:
+        preds_mw = target_scaler.inverse_transform(preds.reshape(-1, 1)).squeeze()
+        targets_mw = target_scaler.inverse_transform(targets.reshape(-1, 1)).squeeze()
+        metrics = calculate_metrics(targets_mw, preds_mw)
+
+        if predictions_path:
+            import pandas as pd
+            os.makedirs(os.path.dirname(predictions_path), exist_ok=True)
+            pd.DataFrame({
+                'actual_consumption_mw': targets_mw,
+                'predicted_consumption_mw': preds_mw,
+                'error_mw': preds_mw - targets_mw
+            }).to_csv(predictions_path, index=False)
+            print(f"Saved validation predictions to: {predictions_path}")
     
     print("\nValidation Metrics:")
     print(f"  MAE: {metrics['MAE']:.2f} MW")

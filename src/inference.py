@@ -246,7 +246,9 @@ class InferencePipeline:
         """
         Load the trained model.
         """
-        checkpoint = torch.load(model_path, map_location=self.device)
+        # This project stores local training metadata in the checkpoint.
+        # PyTorch 2.6+ defaults to weights_only=True, which rejects that format.
+        checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
         
         # Get model config
         config = checkpoint.get('config', {})

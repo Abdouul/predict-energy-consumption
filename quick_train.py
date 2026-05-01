@@ -6,7 +6,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(__file__))
 
-from src.data_collection import collect_all_data
+from src.data_collection import collect_regional_dataset
 from src.preprocessing import preprocess_data, split_data, DataNormalizer, get_feature_columns, get_target_column
 from src.sequence_loader import create_sequences_from_df, create_data_loaders
 from src.model import create_model
@@ -16,15 +16,19 @@ from datetime import datetime, timedelta
 # Quick training test
 print('Quick training test...')
 
-# Collect data
-end_date = datetime.now()
-start_date = end_date - timedelta(days=7)
-df = collect_all_data(start_date, end_date, use_synthetic=True)
+# Collect several months of real RTE data for a few regions.
+# RTE consolidated regional data is historical, so we use a known available period.
+end_date = datetime(2026, 1, 31)
+start_date = end_date - timedelta(days=90)
+regions = ["Ile-de-France", "Auvergne-Rhone-Alpes", "Occitanie"]
+df = collect_regional_dataset(regions, start_date, end_date, use_synthetic=True)
 print(f'Collected {len(df)} records')
+df.to_csv('data/raw_data.csv', index=False)
 
 # Preprocess
 df_processed = preprocess_data(df, add_lags=True)
 print(f'Processed {len(df_processed)} records')
+df_processed.to_csv('data/processed_data.csv', index=False)
 
 # Split
 train_df, test_df = split_data(df_processed, train_ratio=0.8)
@@ -70,10 +74,24 @@ config.input_size = len(feature_cols)
 config.hidden_size = 64
 config.num_layers = 1
 config.dropout = 0.1
-config.num_epochs = 3
+config.num_epochs = 20
 config.batch_size = 32
+config.patience = 5
+config.min_delta = 0.0001
 
-model, history, metrics = train_model(model, train_loader, test_loader, config=config, save_path='models/energy_model.pth')
+model, history, metrics = train_model(
+    model,
+    train_loader,
+    test_loader,
+    config=config,
+    save_path='models/energy_model.pth',
+    target_scaler=target_normalizer,
+    predictions_path='data/evaluation_predictions.csv'
+)
+
+import pickle
+with open('models/scaler.pkl', 'wb') as f:
+    pickle.dump({'feature_scaler': normalizer, 'target_scaler': target_normalizer}, f)
 
 print(f'Final metrics: MAE={metrics["MAE"]:.2f}, RMSE={metrics["RMSE"]:.2f}')
 print('Training complete!')

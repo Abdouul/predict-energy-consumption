@@ -1,40 +1,69 @@
-# Energy Consumption Forecasting Project
+# Regional Electricity Consumption Forecasting
 
-A real-time energy consumption forecasting system using LSTM deep learning, built with PyTorch and Streamlit.
+This project predicts future electricity consumption for French regions using a PyTorch LSTM time series model and a Streamlit dashboard.
 
-## Project Overview
+The demo also recommends low-consumption time slots, for example to charge an electric vehicle or run electrical appliances.
 
-This project implements a complete deep learning pipeline for forecasting energy consumption in France. It uses historical data for training and real-time API data for inference.
+## Project Objective
 
-### Key Features
+The goal is to:
 
-- **Real-time Data**: Fetches live energy and weather data from APIs
-- **LSTM Model**: Custom PyTorch LSTM with multiple layers and dropout
-- **Live Dashboard**: Streamlit app with auto-refresh and real-time predictions
-- **Complete Pipeline**: From data collection to prediction
+- collect electricity consumption data for French regions,
+- add weather data from Open-Meteo,
+- train a PyTorch deep learning model for time series forecasting,
+- predict the next 24 hours of regional consumption,
+- recommend the best low-consumption time window.
+
+## Data Sources
+
+- Electricity consumption: RTE / ODRÉ eCO2mix regional data.
+- Weather: Open-Meteo historical and forecast APIs.
+
+If an API request fails, the project generates realistic synthetic data. This keeps the demo working during an oral defense even without internet access.
 
 ## Project Structure
 
+```text
+app.py                     Streamlit dashboard
+train.py                   Full regional training pipeline
+quick_train.py             Fast training script for a demo model
+requirements.txt           Python dependencies
+data/raw_data.csv          Latest collected raw data
+data/processed_data.csv    Data after feature engineering
+models/energy_model.pth    Saved PyTorch LSTM model
+models/scaler.pkl          Saved feature and target scalers
+src/data_collection.py     RTE/Open-Meteo data collection
+src/preprocessing.py       Cleaning, time features, lag features
+src/sequence_loader.py     Converts rows into LSTM sequences
+src/model.py               PyTorch LSTM architecture
+src/training.py            Custom PyTorch training loop
+src/recommendation.py      24-hour forecast and best time-window logic
+src/inference.py           Extra inference pipeline utilities
 ```
-predict_energy_consuption/
-├── app.py                 # Streamlit dashboard
-├── train.py               # Main training script
-├── quick_train.py        # Quick training test
-├── requirements.txt      # Python dependencies
-├── models/
-│   ├── energy_model.pth  # Trained model weights
-│   └── scaler.pkl        # Data normalizer
-├── data/
-│   ├── raw_data.csv      # Raw collected data
-│   └── processed_data.csv
-└── src/
-    ├── data_collection.py    # API data fetching
-    ├── preprocessing.py     # Data cleaning & features
-    ├── sequence_loader.py   # LSTM sequence creation
-    ├── model.py             # LSTM architecture
-    ├── training.py          # Custom training loop
-    └── inference.py         # Real-time inference
-```
+
+## Model Architecture
+
+The model is a PyTorch LSTM.
+
+- Input sequence: last 24 hours.
+- Target: next hour electricity consumption in MW.
+- Features: weather, hour/day/month features, lag values, rolling averages, and region code.
+- Output: one predicted consumption value.
+
+For a 24-hour forecast, the app predicts one hour, adds that prediction to the history, then predicts the next hour. This is repeated until the selected horizon is reached.
+
+## Recommendation Logic
+
+After the app predicts the next hours, it tests all possible windows of the selected duration.
+
+Example: if the user selects 3 hours, the app compares:
+
+- hour 1 to hour 3,
+- hour 2 to hour 4,
+- hour 3 to hour 5,
+- and so on.
+
+The best recommendation is the window with the lowest average predicted consumption.
 
 ## Installation
 
@@ -42,121 +71,61 @@ predict_energy_consuption/
 pip install -r requirements.txt
 ```
 
-## Usage
+If you use the included virtual environment on Windows:
 
-### Training the Model
-
-```bash
-python train.py
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Or for quick training:
+## Train the Model
 
-```bash
-python quick_train.py
+For a quick demo model, the script uses three regions, about three months of RTE data, and 20 epochs:
+
+```powershell
+.\.venv\Scripts\python.exe quick_train.py
 ```
 
-### Running the Dashboard
+For the full regional training script, the script uses all configured regions, about six months of RTE data, and 60 epochs:
 
-```bash
-streamlit run app.py
+```powershell
+.\.venv\Scripts\python.exe train.py
 ```
 
-The dashboard will open in your browser with:
-- Real-time energy consumption display
-- Weather data
-- Next hour prediction
-- Auto-refresh every 60 seconds
+Training saves:
 
-## Data Sources
+- `models/energy_model.pth`
+- `models/scaler.pkl`
+- `data/raw_data.csv`
+- `data/processed_data.csv`
+- `data/evaluation_predictions.csv`
 
-- **Energy Data**: RTE Eco2Mix (French electricity grid)
-- **Weather Data**: Open-Meteo API
+The evaluation file compares the true consumption values with the model predictions in MW. This is useful for checking whether the model is learning the real RTE patterns.
 
-## Model Architecture
+Latest quick training result:
 
-- **Input**: 24 hours of historical data (24 timesteps)
-- **Features**: Weather + time features + lag features
-- **Architecture**: LSTM with 2 layers, 128 hidden units, dropout
-- **Output**: Next hour's consumption prediction
+- MAE: about 276 MW
+- RMSE: about 379 MW
+- MAPE: about 3.30%
+- R2: about 0.966
 
-## Explanation of Key Components
+## Run the Streamlit App
 
-### 1. Data Collection (`src/data_collection.py`)
-- Fetches real-time energy consumption from RTE API
-- Fetches weather data from Open-Meteo API
-- Generates synthetic data when APIs unavailable
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app.py
+```
 
-### 2. Preprocessing (`src/preprocessing.py`)
-- Cleans data and handles missing values
-- Adds time-based features (hour, day, month, weekend)
-- Adds cyclical encoding for temporal features
-- Adds lag features (past 1, 2, 3, 6, 12, 24 hours)
+Then open:
 
-### 3. Sequence Loader (`src/sequence_loader.py`)
-- Converts tabular data to LSTM sequences
-- Input: 24-hour window
-- Output: Next hour prediction
+```text
+http://localhost:8501
+```
 
-### 4. Model (`src/model.py`)
-- Multi-layer LSTM with dropout
-- Fully connected output layer
-- ~211K trainable parameters
+## What to Explain During the Oral Defense
 
-### 5. Training (`src/training.py`)
-- Custom PyTorch training loop (not sklearn)
-- Adam optimizer with learning rate scheduler
-- Early stopping to prevent overfitting
-
-### 6. Inference (`src/inference.py`)
-- Real-time prediction pipeline
-- Fetches latest data and makes predictions
-
-### 7. Streamlit App (`app.py`)
-- Live dashboard with metrics
-- Auto-refreshing graphs
-- System status display
-
-## For Oral Defense Preparation
-
-### What to Explain:
-
-1. **Why LSTM?**
-   - Good for sequential data
-   - Can learn long-term dependencies
-   - Standard for time series forecasting
-
-2. **Why 24-hour sequence?**
-   - Captures daily patterns
-   - Enough history for accurate predictions
-
-3. **Why weather features?**
-   - Temperature affects heating/cooling demand
-   - Strong correlation with consumption
-
-4. **Why lag features?**
-   - Energy consumption is autocorrelated
-   - Past values help predict future
-
-5. **Custom training loop vs sklearn**
-   - Shows understanding of deep learning fundamentals
-   - More control over the process
-
-## Technical Details
-
-- **Framework**: PyTorch
-- **UI**: Streamlit
-- **Data**: Real-time APIs (RTE, Open-Meteo)
-- **Model**: LSTM (2 layers, 128 hidden units)
-- **Sequence Length**: 24 hours
-- **Features**: 24 (weather + time + lags)
-
-## Notes
-
-- The RTE API may not be accessible, so the project uses synthetic data when needed
-- The model is trained on synthetic data for demonstration
-- In production, you would use real historical data from RTE
-
-## Author
-
-Student Project for Master's Program
+1. The data combines electricity consumption and weather by timestamp.
+2. Time features help the model learn daily and weekly patterns.
+3. Lag features give the model recent past consumption values.
+4. LSTM is used because electricity consumption is time series data.
+5. The recommendation is based on predicted low-consumption periods, not random rules.
+6. The project uses PyTorch for the model and Streamlit for the demo.
+7. The model is not forced to avoid evening hours. If it recommends a time slot, it is because the predicted consumption for that slot is low.

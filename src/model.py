@@ -265,16 +265,20 @@ def load_model(filepath, device=None):
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
-    checkpoint = torch.load(filepath, map_location=device)
+    # This project saves model configuration metadata with the weights.
+    # PyTorch 2.6+ requires weights_only=False for this trusted local file.
+    checkpoint = torch.load(filepath, map_location=device, weights_only=False)
     
     # Recreate model with same architecture
-    config = checkpoint['model_config']
+    config = checkpoint.get('model_config') or checkpoint.get('config')
+    if config is None:
+        raise KeyError("Checkpoint is missing model configuration")
     model = EnergyLSTM(
         input_size=config['input_size'],
         hidden_size=config['hidden_size'],
         num_layers=config['num_layers'],
         dropout=config['dropout'],
-        output_size=config['output_size']
+        output_size=config.get('output_size', 1)
     )
     
     # Load weights
@@ -359,9 +363,9 @@ if __name__ == "__main__":
         loaded_output = loaded_model(dummy_input)
     
     if torch.allclose(original_output, loaded_output):
-        print("   ✓ Save/load successful - outputs match!")
+        print("   Save/load successful - outputs match!")
     else:
-        print("   ✗ Warning: outputs don't match")
+        print("   Warning: outputs don't match")
     
     print("\n" + "=" * 60)
     print("LSTM Model Test Complete!")

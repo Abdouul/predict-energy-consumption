@@ -176,14 +176,30 @@ def create_sequences_from_df(df, feature_cols, target_col, sequence_length=24):
     print(f"  Features: {len(feature_cols)} columns")
     print(f"  Target: {target_col}")
     
-    # Extract features and target
-    features = df[feature_cols].values
-    targets = df[target_col].values
-    
-    # Create sequences
-    X, y = create_sequences(features, targets, sequence_length)
-    
-    return X, y
+    if 'region' not in df.columns:
+        features = df[feature_cols].values
+        targets = df[target_col].values
+        return create_sequences(features, targets, sequence_length)
+
+    all_X = []
+    all_y = []
+    for region, group in df.groupby('region', sort=False):
+        group = group.sort_values('timestamp')
+        if len(group) <= sequence_length:
+            continue
+        print(f"  Region: {region}")
+        X_region, y_region = create_sequences(
+            group[feature_cols].values,
+            group[target_col].values,
+            sequence_length
+        )
+        all_X.append(X_region)
+        all_y.append(y_region)
+
+    if not all_X:
+        return np.array([]), np.array([])
+
+    return np.concatenate(all_X), np.concatenate(all_y)
 
 
 # ============================================================================

@@ -28,7 +28,7 @@ warnings.filterwarnings('ignore')
 sys.path.insert(0, os.path.dirname(__file__))
 
 # Import our modules
-from src.data_collection import collect_all_data
+from src.data_collection import collect_regional_dataset, get_region_names
 from src.preprocessing import preprocess_data, split_data, DataNormalizer, get_feature_columns, get_target_column
 from src.sequence_loader import create_sequences_from_df, create_data_loaders
 from src.model import create_model, print_model_summary
@@ -43,7 +43,8 @@ class ProjectConfig:
     """Project configuration."""
     
     # Data collection
-    data_days = 30  # Days of historical data to collect
+    data_days = 180  # About six months of historical data
+    regions = get_region_names()
     
     # Sequence parameters
     sequence_length = 24  # Use last 24 hours to predict next hour
@@ -55,7 +56,7 @@ class ProjectConfig:
     
     # Training parameters
     batch_size = 32
-    num_epochs = 50
+    num_epochs = 60
     learning_rate = 0.001
     train_ratio = 0.8
     
@@ -89,13 +90,15 @@ def main():
     print("STEP 1: DATA COLLECTION")
     print("=" * 70)
     
-    print(f"\nCollecting {config.data_days} days of historical data...")
+    print(f"\nCollecting {config.data_days} days of regional historical data...")
     
-    end_date = datetime.now()
+    # RTE consolidated regional data is historical. January 2026 is available
+    # in the dataset used for this student demo.
+    end_date = datetime(2026, 1, 31)
     start_date = end_date - timedelta(days=config.data_days)
     
-    # Collect data (uses API or generates synthetic if unavailable)
-    df = collect_all_data(start_date, end_date, use_synthetic=True)
+    # Collect regional data (uses RTE/Open-Meteo, with synthetic fallback)
+    df = collect_regional_dataset(config.regions, start_date, end_date, use_synthetic=True)
     
     print(f"\nCollected {len(df)} records")
     print(f"Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
@@ -260,6 +263,7 @@ def main():
     training_config.num_epochs = config.num_epochs
     training_config.learning_rate = config.learning_rate
     training_config.patience = 10
+    training_config.min_delta = 0.0001
     
     # Train
     model, history, metrics = train_model(
@@ -267,7 +271,9 @@ def main():
         train_loader,
         test_loader,
         config=training_config,
-        save_path=os.path.join(config.model_dir, "energy_model.pth")
+        save_path=os.path.join(config.model_dir, "energy_model.pth"),
+        target_scaler=target_normalizer,
+        predictions_path=os.path.join(config.data_dir, "evaluation_predictions.csv")
     )
     
     # =========================================================================
@@ -277,19 +283,20 @@ def main():
     print("TRAINING COMPLETE!")
     print("=" * 70)
     
-    print("\n📊 Final Metrics:")
+    print("\nFinal Metrics:")
     print(f"  MAE: {metrics['MAE']:.2f} MW")
     print(f"  RMSE: {metrics['RMSE']:.2f} MW")
     print(f"  MAPE: {metrics['MAPE']:.2f}%")
     print(f"  R²: {metrics['R2']:.4f}")
     
-    print("\n📁 Output files:")
+    print("\nOutput files:")
     print(f"  Model: {config.model_dir}/energy_model.pth")
     print(f"  Scalers: {config.model_dir}/scaler.pkl")
     print(f"  Raw data: {config.data_dir}/raw_data.csv")
     print(f"  Processed data: {config.data_dir}/processed_data.csv")
+    print(f"  Evaluation: {config.data_dir}/evaluation_predictions.csv")
     
-    print("\n🚀 Next steps:")
+    print("\nNext steps:")
     print("  1. Run the Streamlit dashboard: streamlit run app.py")
     print("  2. The model will make real-time predictions")
     print("  3. Dashboard auto-refreshes every 60 seconds")

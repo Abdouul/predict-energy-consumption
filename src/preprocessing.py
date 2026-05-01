@@ -16,6 +16,21 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from datetime import datetime
 
+REGION_CODES = {
+    "Auvergne-Rhone-Alpes": 0,
+    "Bourgogne-Franche-Comte": 1,
+    "Bretagne": 2,
+    "Centre-Val de Loire": 3,
+    "Grand Est": 4,
+    "Hauts-de-France": 5,
+    "Ile-de-France": 6,
+    "Normandie": 7,
+    "Nouvelle-Aquitaine": 8,
+    "Occitanie": 9,
+    "Pays de la Loire": 10,
+    "Provence-Alpes-Cote d'Azur": 11,
+}
+
 
 # ============================================================================
 # PART 1: DATA CLEANING
@@ -51,14 +66,19 @@ def clean_data(df):
     if 'timestamp' in df.columns:
         df['timestamp'] = pd.to_datetime(df['timestamp'])
     
-    # Remove duplicates based on timestamp
+    # Remove duplicates based on timestamp, and region when available.
     initial_len = len(df)
-    df = df.drop_duplicates(subset=['timestamp'], keep='first')
+    duplicate_cols = ['timestamp']
+    if 'region' in df.columns:
+        duplicate_cols.append('region')
+    df = df.drop_duplicates(subset=duplicate_cols, keep='first')
     if len(df) < initial_len:
         print(f"  Removed {initial_len - len(df)} duplicate records")
     
-    # Sort by timestamp
-    df = df.sort_values('timestamp').reset_index(drop=True)
+    sort_cols = ['timestamp']
+    if 'region' in df.columns:
+        sort_cols = ['region', 'timestamp']
+    df = df.sort_values(sort_cols).reset_index(drop=True)
     
     # Handle missing values
     missing_before = df.isnull().sum().sum()
@@ -66,9 +86,12 @@ def clean_data(df):
     if missing_before > 0:
         print(f"  Removed {missing_before} rows with missing values")
     
-    # Validate consumption values (France typically 40-80 GW)
+    # Validate consumption values. Regional values are lower than national ones.
     if 'consumption_mw' in df.columns:
-        valid_mask = (df['consumption_mw'] > 30000) & (df['consumption_mw'] < 90000)
+        if 'region' in df.columns:
+            valid_mask = (df['consumption_mw'] > 100) & (df['consumption_mw'] < 30000)
+        else:
+            valid_mask = (df['consumption_mw'] > 30000) & (df['consumption_mw'] < 90000)
         invalid_count = (~valid_mask).sum()
         if invalid_count > 0:
             print(f"  Warning: {invalid_count} rows with unusual consumption values")
@@ -76,6 +99,14 @@ def clean_data(df):
     
     print(f"  Cleaned data: {len(df)} records remaining")
     
+    return df
+
+
+def add_region_features(df):
+    """Convert the region name into a simple numeric feature."""
+    df = df.copy()
+    if 'region' in df.columns:
+        df['region_code'] = df['region'].map(REGION_CODES).fillna(6).astype(int)
     return df
 
 
@@ -168,19 +199,26 @@ def add_lag_features(df, target_col='consumption_mw', lags=[1, 2, 3, 6, 12, 24])
     print(f"Adding lag features for {target_col}...")
     
     df = df.copy()
+    groups = [df]
+    if 'region' in df.columns:
+        groups = [group for _, group in df.groupby('region', sort=False)]
+
+    frames = []
+    for group in groups:
+        group = group.copy()
+        for lag in lags:
+            col_name = f'lag_{lag}h'
+            group[col_name] = group[target_col].shift(lag)
+            print(f"  Added: {col_name}")
+        
+        # Rolling statistics (moving averages)
+        for window in [6, 12, 24]:
+            col_name = f'rolling_mean_{window}h'
+            group[col_name] = group[target_col].shift(1).rolling(window=window).mean()
+            print(f"  Added: {col_name}")
+        frames.append(group)
     
-    for lag in lags:
-        col_name = f'lag_{lag}h'
-        df[col_name] = df[target_col].shift(lag)
-        print(f"  Added: {col_name}")
-    
-    # Rolling statistics (moving averages)
-    for window in [6, 12, 24]:
-        col_name = f'rolling_mean_{window}h'
-        df[col_name] = df[target_col].shift(1).rolling(window=window).mean()
-        print(f"  Added: {col_name}")
-    
-    return df
+    return pd.concat(frames, ignore_index=True)
 
 
 # ============================================================================
@@ -310,10 +348,19 @@ def split_data(df, train_ratio=0.8):
     """
     print(f"Splitting data with {train_ratio*100}% train / {(1-train_ratio)*100}% test...")
     
-    split_idx = int(len(df) * train_ratio)
-    
-    train_df = df.iloc[:split_idx].copy()
-    test_df = df.iloc[split_idx:].copy()
+    if 'region' in df.columns:
+        train_parts = []
+        test_parts = []
+        for _, group in df.groupby('region', sort=False):
+            split_idx = int(len(group) * train_ratio)
+            train_parts.append(group.iloc[:split_idx].copy())
+            test_parts.append(group.iloc[split_idx:].copy())
+        train_df = pd.concat(train_parts, ignore_index=True)
+        test_df = pd.concat(test_parts, ignore_index=True)
+    else:
+        split_idx = int(len(df) * train_ratio)
+        train_df = df.iloc[:split_idx].copy()
+        test_df = df.iloc[split_idx:].copy()
     
     print(f"  Training set: {len(train_df)} records")
     print(f"  Test set: {len(test_df)} records")
@@ -357,6 +404,9 @@ def preprocess_data(df, add_lags=True):
     
     # Step 2: Add time features
     df = add_time_features(df)
+
+    # Optional region code for regional models
+    df = add_region_features(df)
     
     # Step 3: Add lag features
     if add_lags:
@@ -392,7 +442,7 @@ def get_feature_columns(df):
         list: Column names to use as features
     """
     # Exclude timestamp and target
-    exclude = ['timestamp', 'consumption_mw']
+    exclude = ['timestamp', 'consumption_mw', 'region']
     features = [col for col in df.columns if col not in exclude]
     
     return features
